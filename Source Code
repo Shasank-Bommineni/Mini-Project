@@ -1,0 +1,218 @@
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7735.h>
+#include <SPI.h>
+
+// TFT Pin Definitions
+#define TFT_CS    5
+#define TFT_RST   4
+#define TFT_DC    2
+#define TFT_MOSI  23
+#define TFT_SCLK  18
+
+// Sensor Pin Definitions
+#define TDS_PIN       34
+#define TURBIDITY_PIN 35
+
+// TFT Object
+Adafruit_ST7735 tft = Adafruit_ST7735(TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST);
+
+// Constants
+#define VREF          3.3
+#define ADC_RES       4096.0
+#define NUM_SAMPLES   30
+
+// Variables
+float tdsValue = 0;
+float turbidityValue = 0;
+float temperature = 25.0; // assumed room temp
+
+void setup() {
+  Serial.begin(115200);
+  
+  // Init TFT
+  tft.initR(INITR_BLACKTAB);
+  tft.setRotation(1);
+  tft.fillScreen(ST77XX_BLACK);
+  
+  // Show splash screen
+  showSplash();
+  delay(2000);
+  
+  // Draw static UI
+  drawUI();
+}
+
+void loop() {
+  // Read sensors
+  tdsValue      = readTDS();
+  turbidityValue = readTurbidity();
+  
+  // Update display
+  updateDisplay();
+  
+  // Print to Serial
+  Serial.print("TDS: ");
+  Serial.print(tdsValue);
+  Serial.print(" ppm  |  Turbidity: ");
+  Serial.print(turbidityValue);
+  Serial.println(" NTU");
+  
+  delay(1000);
+}
+
+// ─────────────────────────────────────────
+// READ TDS
+// ─────────────────────────────────────────
+float readTDS() {
+  long sum = 0;
+  for (int i = 0; i < NUM_SAMPLES; i++) {
+    sum += analogRead(TDS_PIN);
+    delay(10);
+  }
+  float avgADC = sum / NUM_SAMPLES;
+  float voltage = avgADC * VREF / ADC_RES;
+  
+  // Temperature compensation
+  float compensationCoeff = 1.0 + 0.02 * (temperature - 25.0);
+  float compVoltage = voltage / compensationCoeff;
+  
+  // TDS formula
+  float tds = (133.42 * pow(compVoltage, 3)
+             - 255.86 * pow(compVoltage, 2)
+             + 857.39 * compVoltage) * 0.5;
+  
+  return tds;
+}
+
+// ─────────────────────────────────────────
+// READ TURBIDITY
+// ─────────────────────────────────────────
+float readTurbidity() {
+  long sum = 0;
+  for (int i = 0; i < NUM_SAMPLES; i++) {
+    sum += analogRead(TURBIDITY_PIN);
+    delay(10);
+  }
+  float avgADC = sum / NUM_SAMPLES;
+  float voltage = avgADC * VREF / ADC_RES;
+  
+  // Convert voltage to NTU
+  // Clear water = ~4.2V = 0 NTU
+  // Dirty water = lower voltage = higher NTU
+  float ntu = 0;
+  if (voltage < 2.5) {
+    ntu = 3000;
+  } else {
+    ntu = -1120.4 * pow(voltage, 2)
+          + 5742.3 * voltage
+          - 4353.8;
+  }
+  if (ntu < 0) ntu = 0;
+  
+  return ntu;
+}
+
+// ─────────────────────────────────────────
+// SPLASH SCREEN
+// ─────────────────────────────────────────
+void showSplash() {
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setTextColor(ST77XX_CYAN);
+  tft.setTextSize(2);
+  tft.setCursor(10, 20);
+  tft.println("  WATER");
+  tft.setCursor(10, 45);
+  tft.println("QUALITY");
+  tft.setCursor(10, 70);
+  tft.println("MONITOR");
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setTextSize(1);
+  tft.setCursor(20, 105);
+  tft.println("Initializing...");
+}
+
+// ─────────────────────────────────────────
+// DRAW STATIC UI
+// ─────────────────────────────────────────
+void drawUI() {
+  tft.fillScreen(ST77XX_BLACK);
+  
+  // Title bar
+  tft.fillRect(0, 0, 160, 20, ST77XX_CYAN);
+  tft.setTextColor(ST77XX_BLACK);
+  tft.setTextSize(1);
+  tft.setCursor(20, 6);
+  tft.println("WATER QUALITY METER");
+  
+  // TDS Box
+  tft.drawRect(2, 25, 156, 45, ST77XX_CYAN);
+  tft.setTextColor(ST77XX_CYAN);
+  tft.setTextSize(1);
+  tft.setCursor(8, 30);
+  tft.println("TDS (ppm)");
+  
+  // Turbidity Box
+  tft.drawRect(2, 75, 156, 45, ST77XX_GREEN);
+  tft.setTextColor(ST77XX_GREEN);
+  tft.setTextSize(1);
+  tft.setCursor(8, 80);
+  tft.println("TURBIDITY (NTU)");
+  
+  // Status bar
+  tft.setTextColor(ST77XX_YELLOW);
+  tft.setCursor(5, 125);
+  tft.println("ESP32 Water Monitor v1.0");
+}
+
+// ─────────────────────────────────────────
+// UPDATE DISPLAY VALUES
+// ─────────────────────────────────────────
+void updateDisplay() {
+  // Clear old TDS value
+  tft.fillRect(3, 42, 154, 25, ST77XX_BLACK);
+  tft.setTextSize(2);
+  tft.setCursor(10, 45);
+  
+  // TDS color coding
+  if (tdsValue < 300) {
+    tft.setTextColor(ST77XX_GREEN);
+  } else if (tdsValue < 600) {
+    tft.setTextColor(ST77XX_YELLOW);
+  } else {
+    tft.setTextColor(ST77XX_RED);
+  }
+  tft.print(tdsValue, 0);
+  tft.print(" ppm");
+  
+  // Clear old Turbidity value
+  tft.fillRect(3, 92, 154, 25, ST77XX_BLACK);
+  tft.setTextSize(2);
+  tft.setCursor(10, 95);
+  
+  // Turbidity color coding
+  if (turbidityValue < 10) {
+    tft.setTextColor(ST77XX_GREEN);
+  } else if (turbidityValue < 100) {
+    tft.setTextColor(ST77XX_YELLOW);
+  } else {
+    tft.setTextColor(ST77XX_RED);
+  }
+  tft.print(turbidityValue, 0);
+  tft.print(" NTU");
+  
+  // Water quality status
+  tft.fillRect(0, 118, 160, 10, ST77XX_BLACK);
+  tft.setTextSize(1);
+  tft.setCursor(5, 118);
+  
+  if (tdsValue < 300 && turbidityValue < 10) {
+    tft.setTextColor(ST77XX_GREEN);
+    tft.println("Status: GOOD WATER");
+  } else if (tdsValue < 600 && turbidityValue < 100) {
+    tft.setTextColor(ST77XX_YELLOW);
+    tft.println("Status: ACCEPTABLE");
+  } else {
+    tft.setTextColor(ST77XX_RED);
+    tft.println("Status: POOR WATER!");
+  }
+}
